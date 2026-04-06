@@ -1,0 +1,66 @@
+#!/bin/bash
+set -euo pipefail
+
+INSTALL_DIR="/opt/onepam"
+CONFIG_DIR="$INSTALL_DIR/etc"
+BINARY_NAME="onepam-agent"
+RELEASE_URL="${release_url}"
+
+mkdir -p "$INSTALL_DIR/bin" "$INSTALL_DIR/data/queue" "$CONFIG_DIR"
+
+ARCH=$(uname -m)
+case "$ARCH" in
+  x86_64)  DOWNLOAD_ARCH="amd64" ;;
+  aarch64) DOWNLOAD_ARCH="arm64" ;;
+  *)       echo "Unsupported architecture: $ARCH"; exit 1 ;;
+esac
+
+BINARY_URL="$RELEASE_URL/agent/${agent_version}/$BINARY_NAME-linux-$DOWNLOAD_ARCH"
+curl -fsSL --retry 3 -o "$INSTALL_DIR/bin/$BINARY_NAME" "$BINARY_URL"
+chmod +x "$INSTALL_DIR/bin/$BINARY_NAME"
+
+AGENT_ID=$(cat /proc/sys/kernel/random/uuid 2>/dev/null || uuidgen | tr '[:upper:]' '[:lower:]')
+echo "$AGENT_ID" > "$CONFIG_DIR/agent-id"
+chmod 600 "$CONFIG_DIR/agent-id"
+
+cat > "$CONFIG_DIR/agent.env" <<ENVEOF
+AGENT_API_URL=${server_url}
+AGENT_TENANT_ID=${tenant_id}
+AGENT_ID=$AGENT_ID
+AGENT_LOG_LEVEL=${log_level}
+%{ if group_uuid != "" ~}
+AGENT_GROUP_UUID=${group_uuid}
+%{ endif ~}
+ENVEOF
+chmod 600 "$CONFIG_DIR/agent.env"
+
+cat > /etc/systemd/system/onepam-agent.service <<SVCEOF
+[Unit]
+Description=OnePAM Agent
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=notify
+EnvironmentFile=-/opt/onepam/etc/agent.env
+ExecStart=/opt/onepam/bin/onepam-agent \
+    --server=\$${AGENT_API_URL} \
+    --tenant-id=\$${AGENT_TENANT_ID} \
+    --agent-id=\$${AGENT_ID} \
+    --data-dir=/opt/onepam/data \
+    --log-level=\$${AGENT_LOG_LEVEL}
+Restart=always
+RestartSec=10
+WatchdogSec=120
+LimitNOFILE=65536
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=onepam-agent
+
+[Install]
+WantedBy=multi-user.target
+SVCEOF
+
+systemctl daemon-reload
+systemctl enable --now onepam-agent

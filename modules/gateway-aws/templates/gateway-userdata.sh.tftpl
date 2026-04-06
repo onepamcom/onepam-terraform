@@ -1,0 +1,119 @@
+#!/bin/bash -xe
+set -euo pipefail
+
+dnf update -y
+dnf install -y curl jq
+
+INSTALL_DIR="/data/app"
+BIN_DIR="$INSTALL_DIR/bin"
+CONFIG_DIR="$INSTALL_DIR/etc"
+DATA_DIR="$INSTALL_DIR/data"
+RECORDING_DIR="$DATA_DIR/recordings"
+SERVICE_USER="onepam-gw"
+BINARY_NAME="onepam-gateway"
+
+useradd --system --shell /usr/sbin/nologin \
+        --home-dir "$INSTALL_DIR" --create-home \
+        --comment "OnePAM Gateway" "$SERVICE_USER" 2>/dev/null || true
+
+for d in "$BIN_DIR" "$CONFIG_DIR" "$DATA_DIR" "$INSTALL_DIR/log" "$RECORDING_DIR"; do
+  mkdir -p "$d"
+done
+chown -R "$SERVICE_USER:$SERVICE_USER" "$INSTALL_DIR"
+chmod 750 "$INSTALL_DIR" "$CONFIG_DIR" "$DATA_DIR"
+chmod 777 "$RECORDING_DIR"
+
+ARCH="${architecture}"
+DOWNLOAD_URL="https://updates.onepam.com/gateway/latest/$BINARY_NAME-linux-$ARCH"
+curl -fSL --retry 3 --retry-delay 5 -o "$BIN_DIR/$BINARY_NAME" "$DOWNLOAD_URL"
+chmod 755 "$BIN_DIR/$BINARY_NAME"
+chown root:root "$BIN_DIR/$BINARY_NAME"
+
+export AWS_REGION=$(curl -s http://169.254.169.254/latest/meta-data/placement/region)
+API_TOKEN_VALUE=$(aws ssm get-parameter \
+  --name "/onepam/gateway/${gateway_id}/api-token" \
+  --query "Parameter.Value" --output text --region "$AWS_REGION")
+S3_AK_VALUE=$(aws ssm get-parameter \
+  --name "/onepam/gateway/${gateway_id}/s3-access-key" \
+  --query "Parameter.Value" --output text --region "$AWS_REGION")
+S3_SK_VALUE=$(aws ssm get-parameter \
+  --name "/onepam/gateway/${gateway_id}/s3-secret-key" \
+  --query "Parameter.Value" --output text --region "$AWS_REGION")
+
+SECRET_KEY=$(LC_ALL=C tr -dc 'a-f0-9' < /dev/urandom | head -c 64)
+COOKIE_KEY=$(LC_ALL=C tr -dc 'a-f0-9' < /dev/urandom | head -c 32)
+
+cat > "$CONFIG_DIR/gateway.env" <<GWEOF
+GATEWAY_ID=${gateway_id}
+GATEWAY_API_URL=${api_url}
+GATEWAY_API_TOKEN=$API_TOKEN_VALUE
+GATEWAY_LISTEN_ADDR=:443
+GATEWAY_S3_ENDPOINT=${s3_endpoint}
+GATEWAY_S3_BUCKET=${s3_bucket}
+GATEWAY_S3_REGION=${s3_region}
+GATEWAY_S3_ACCESS_KEY=$S3_AK_VALUE
+GATEWAY_S3_SECRET_KEY=$S3_SK_VALUE
+GATEWAY_S3_PATH_STYLE=${s3_path_style}
+GATEWAY_S3_PREFIX=recordings/
+GATEWAY_PUBLIC_DOMAIN=${public_domain}
+GATEWAY_WEBAPP_COOKIE_KEY=$COOKIE_KEY
+GATEWAY_ACME_ENABLED=${acme_enabled}
+GATEWAY_ACME_EMAIL=${acme_email}
+GATEWAY_MTLS_ENABLED=${enable_mtls}
+GATEWAY_VPN_ENABLED=${enable_vpn}
+GATEWAY_VPN_LISTEN_PORT=51820
+GATEWAY_VPN_CIDR=100.64.0.0/10
+GATEWAY_VPN_DNS=100.64.0.1
+GATEWAY_VPN_MAX_PEERS_PER_USER=5
+GATEWAY_VPN_SERVER_KEY_PATH=$DATA_DIR/vpn_server_key
+GATEWAY_DATA_DIR=$DATA_DIR
+GATEWAY_SECRET_KEY=$SECRET_KEY
+GATEWAY_SESSION_IDLE_TIMEOUT=900
+GATEWAY_DRAIN_TIMEOUT=30
+GWEOF
+chmod 600 "$CONFIG_DIR/gateway.env"
+chown "$SERVICE_USER:$SERVICE_USER" "$CONFIG_DIR/gateway.env"
+
+CAPS="CAP_NET_BIND_SERVICE"
+PROTECT_TUNABLES="true"
+if [ "${enable_vpn}" = "1" ]; then
+  CAPS="CAP_NET_BIND_SERVICE CAP_NET_ADMIN CAP_NET_RAW"
+  PROTECT_TUNABLES="false"
+fi
+
+cat > /etc/systemd/system/onepam-gateway.service <<GWSVCEOF
+[Unit]
+Description=OnePAM Zero Trust Access Gateway
+Documentation=https://onepam.com/docs/gateway
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=$SERVICE_USER
+Group=$SERVICE_USER
+EnvironmentFile=$CONFIG_DIR/gateway.env
+ExecStart=$BIN_DIR/$BINARY_NAME
+Restart=always
+RestartSec=10
+WatchdogSec=120
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=$INSTALL_DIR $RECORDING_DIR
+ProtectKernelTunables=$PROTECT_TUNABLES
+AmbientCapabilities=$CAPS
+CapabilityBoundingSet=$CAPS
+LimitNOFILE=65536
+LimitMEMLOCK=infinity
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=onepam-gateway
+
+[Install]
+WantedBy=multi-user.target
+GWSVCEOF
+
+systemctl daemon-reload
+systemctl enable --now onepam-gateway
