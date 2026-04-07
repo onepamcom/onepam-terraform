@@ -24,8 +24,12 @@ module "onepam_agent" {
   tenant_id = "YOUR-TENANT-UUID"
 }
 
+data "aws_ssm_parameter" "ami" {
+  name = "/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64"
+}
+
 resource "aws_instance" "server" {
-  ami           = "ami-0abcdef1234567890"
+  ami           = data.aws_ssm_parameter.ami.value
   instance_type = "t3.micro"
   user_data     = module.onepam_agent.install_script
 }

@@ -5,7 +5,7 @@ terraform {
 }
 
 provider "aws" {
-  region = "us-east-1"
+  region = var.aws_region
 }
 
 module "onepam_agent" {
@@ -13,8 +13,12 @@ module "onepam_agent" {
   tenant_id = var.tenant_id
 }
 
+data "aws_ssm_parameter" "ami" {
+  name = "/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64"
+}
+
 resource "aws_instance" "example" {
-  ami           = "ami-0abcdef1234567890"
+  ami           = data.aws_ssm_parameter.ami.value
   instance_type = "t3.micro"
   user_data     = module.onepam_agent.install_script
 
@@ -24,4 +28,10 @@ resource "aws_instance" "example" {
 variable "tenant_id" {
   description = "OnePAM tenant UUID"
   type        = string
+}
+
+variable "aws_region" {
+  description = "AWS region"
+  type        = string
+  default     = "us-east-1"
 }

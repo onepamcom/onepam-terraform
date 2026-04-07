@@ -16,7 +16,11 @@ case "$ARCH" in
 esac
 
 BINARY_URL="$RELEASE_URL/agent/${agent_version}/$BINARY_NAME-linux-$DOWNLOAD_ARCH"
+CHECKSUM_URL="$BINARY_URL.sha256"
 curl -fsSL --retry 3 -o "$INSTALL_DIR/bin/$BINARY_NAME" "$BINARY_URL"
+curl -fsSL --retry 3 -o "$INSTALL_DIR/bin/$BINARY_NAME.sha256" "$CHECKSUM_URL"
+(cd "$INSTALL_DIR/bin" && sha256sum -c "$BINARY_NAME.sha256")
+rm -f "$INSTALL_DIR/bin/$BINARY_NAME.sha256"
 chmod +x "$INSTALL_DIR/bin/$BINARY_NAME"
 
 AGENT_ID=$(cat /proc/sys/kernel/random/uuid 2>/dev/null || uuidgen | tr '[:upper:]' '[:lower:]')
@@ -24,12 +28,12 @@ echo "$AGENT_ID" > "$CONFIG_DIR/agent-id"
 chmod 600 "$CONFIG_DIR/agent-id"
 
 cat > "$CONFIG_DIR/agent.env" <<ENVEOF
-AGENT_API_URL=${server_url}
-AGENT_TENANT_ID=${tenant_id}
-AGENT_ID=$AGENT_ID
-AGENT_LOG_LEVEL=${log_level}
+AGENT_API_URL="${server_url}"
+AGENT_TENANT_ID="${tenant_id}"
+AGENT_ID="$AGENT_ID"
+AGENT_LOG_LEVEL="${log_level}"
 %{ if group_uuid != "" ~}
-AGENT_GROUP_UUID=${group_uuid}
+AGENT_GROUP_UUID="${group_uuid}"
 %{ endif ~}
 ENVEOF
 chmod 600 "$CONFIG_DIR/agent.env"

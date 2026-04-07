@@ -18,6 +18,11 @@ variable "group_uuid" {
   description = "Optional group UUID to assign the agent to"
   type        = string
   default     = ""
+
+  validation {
+    condition     = var.group_uuid == "" || can(regex("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", var.group_uuid))
+    error_message = "group_uuid must be empty or a valid UUID."
+  }
 }
 
 variable "agent_version" {

@@ -1,4 +1,4 @@
-#!/bin/bash -xe
+#!/bin/bash -e
 set -euo pipefail
 
 dnf update -y
@@ -21,55 +21,67 @@ for d in "$BIN_DIR" "$CONFIG_DIR" "$DATA_DIR" "$INSTALL_DIR/log" "$RECORDING_DIR
 done
 chown -R "$SERVICE_USER:$SERVICE_USER" "$INSTALL_DIR"
 chmod 750 "$INSTALL_DIR" "$CONFIG_DIR" "$DATA_DIR"
-chmod 777 "$RECORDING_DIR"
+chmod 770 "$RECORDING_DIR"
 
 ARCH="${architecture}"
 DOWNLOAD_URL="https://updates.onepam.com/gateway/latest/$BINARY_NAME-linux-$ARCH"
+CHECKSUM_URL="$DOWNLOAD_URL.sha256"
 curl -fSL --retry 3 --retry-delay 5 -o "$BIN_DIR/$BINARY_NAME" "$DOWNLOAD_URL"
+curl -fSL --retry 3 --retry-delay 5 -o "$BIN_DIR/$BINARY_NAME.sha256" "$CHECKSUM_URL"
+(cd "$BIN_DIR" && sha256sum -c "$BINARY_NAME.sha256")
+rm -f "$BIN_DIR/$BINARY_NAME.sha256"
 chmod 755 "$BIN_DIR/$BINARY_NAME"
 chown root:root "$BIN_DIR/$BINARY_NAME"
 
-export AWS_REGION=$(curl -s http://169.254.169.254/latest/meta-data/placement/region)
+TOKEN=$(curl -sf -X PUT "http://169.254.169.254/latest/api/token" \
+  -H "X-aws-ec2-metadata-token-ttl-seconds: 300") || { echo "Failed to get IMDS token"; exit 1; }
+export AWS_REGION=$(curl -sf -H "X-aws-ec2-metadata-token: $TOKEN" \
+  http://169.254.169.254/latest/meta-data/placement/region) || { echo "Failed to get AWS region from IMDS"; exit 1; }
+if [ -z "$AWS_REGION" ]; then echo "AWS_REGION is empty"; exit 1; fi
+
 API_TOKEN_VALUE=$(aws ssm get-parameter \
   --name "/onepam/gateway/${gateway_id}/api-token" \
+  --with-decryption \
   --query "Parameter.Value" --output text --region "$AWS_REGION")
 S3_AK_VALUE=$(aws ssm get-parameter \
   --name "/onepam/gateway/${gateway_id}/s3-access-key" \
+  --with-decryption \
   --query "Parameter.Value" --output text --region "$AWS_REGION")
 S3_SK_VALUE=$(aws ssm get-parameter \
   --name "/onepam/gateway/${gateway_id}/s3-secret-key" \
+  --with-decryption \
   --query "Parameter.Value" --output text --region "$AWS_REGION")
 
 SECRET_KEY=$(LC_ALL=C tr -dc 'a-f0-9' < /dev/urandom | head -c 64)
 COOKIE_KEY=$(LC_ALL=C tr -dc 'a-f0-9' < /dev/urandom | head -c 32)
 
 cat > "$CONFIG_DIR/gateway.env" <<GWEOF
-GATEWAY_ID=${gateway_id}
-GATEWAY_API_URL=${api_url}
-GATEWAY_API_TOKEN=$API_TOKEN_VALUE
-GATEWAY_LISTEN_ADDR=:443
-GATEWAY_S3_ENDPOINT=${s3_endpoint}
-GATEWAY_S3_BUCKET=${s3_bucket}
-GATEWAY_S3_REGION=${s3_region}
-GATEWAY_S3_ACCESS_KEY=$S3_AK_VALUE
-GATEWAY_S3_SECRET_KEY=$S3_SK_VALUE
-GATEWAY_S3_PATH_STYLE=${s3_path_style}
-GATEWAY_S3_PREFIX=recordings/
-GATEWAY_PUBLIC_DOMAIN=${public_domain}
-GATEWAY_WEBAPP_COOKIE_KEY=$COOKIE_KEY
-GATEWAY_ACME_ENABLED=${acme_enabled}
-GATEWAY_ACME_EMAIL=${acme_email}
-GATEWAY_MTLS_ENABLED=${enable_mtls}
-GATEWAY_VPN_ENABLED=${enable_vpn}
-GATEWAY_VPN_LISTEN_PORT=51820
-GATEWAY_VPN_CIDR=100.64.0.0/10
-GATEWAY_VPN_DNS=100.64.0.1
-GATEWAY_VPN_MAX_PEERS_PER_USER=5
-GATEWAY_VPN_SERVER_KEY_PATH=$DATA_DIR/vpn_server_key
-GATEWAY_DATA_DIR=$DATA_DIR
-GATEWAY_SECRET_KEY=$SECRET_KEY
-GATEWAY_SESSION_IDLE_TIMEOUT=900
-GATEWAY_DRAIN_TIMEOUT=30
+GATEWAY_ID="${gateway_id}"
+GATEWAY_API_URL="${api_url}"
+GATEWAY_API_TOKEN="$API_TOKEN_VALUE"
+GATEWAY_LISTEN_ADDR=":443"
+GATEWAY_S3_ENDPOINT="${s3_endpoint}"
+GATEWAY_S3_BUCKET="${s3_bucket}"
+GATEWAY_S3_REGION="${s3_region}"
+GATEWAY_S3_ACCESS_KEY="$S3_AK_VALUE"
+GATEWAY_S3_SECRET_KEY="$S3_SK_VALUE"
+GATEWAY_S3_PATH_STYLE="${s3_path_style}"
+GATEWAY_S3_PREFIX="recordings/"
+GATEWAY_PUBLIC_DOMAIN="${public_domain}"
+GATEWAY_WEBAPP_COOKIE_KEY="$COOKIE_KEY"
+GATEWAY_ACME_ENABLED="${acme_enabled}"
+GATEWAY_ACME_EMAIL="${acme_email}"
+GATEWAY_MTLS_ENABLED="${enable_mtls}"
+GATEWAY_VPN_ENABLED="${enable_vpn}"
+GATEWAY_VPN_LISTEN_PORT="51820"
+GATEWAY_VPN_CIDR="100.64.0.0/10"
+GATEWAY_VPN_DNS="100.64.0.1"
+GATEWAY_VPN_MAX_PEERS_PER_USER="5"
+GATEWAY_VPN_SERVER_KEY_PATH="$DATA_DIR/vpn_server_key"
+GATEWAY_DATA_DIR="$DATA_DIR"
+GATEWAY_SECRET_KEY="$SECRET_KEY"
+GATEWAY_SESSION_IDLE_TIMEOUT="900"
+GATEWAY_DRAIN_TIMEOUT="30"
 GWEOF
 chmod 600 "$CONFIG_DIR/gateway.env"
 chown "$SERVICE_USER:$SERVICE_USER" "$CONFIG_DIR/gateway.env"

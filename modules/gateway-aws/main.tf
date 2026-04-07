@@ -134,6 +134,12 @@ resource "aws_launch_template" "gateway" {
     arn = aws_iam_instance_profile.gateway.arn
   }
 
+  metadata_options {
+    http_endpoint               = "enabled"
+    http_tokens                 = "required"
+    http_put_response_hop_limit = 2
+  }
+
   network_interfaces {
     associate_public_ip_address = true
     security_groups             = [aws_security_group.gateway.id]

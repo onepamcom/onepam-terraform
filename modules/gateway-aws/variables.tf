@@ -28,6 +28,11 @@ variable "architecture" {
 variable "gateway_id" {
   description = "Gateway UUID from the OnePAM web UI or API"
   type        = string
+
+  validation {
+    condition     = can(regex("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", var.gateway_id))
+    error_message = "gateway_id must be a valid UUID."
+  }
 }
 
 variable "api_url" {
